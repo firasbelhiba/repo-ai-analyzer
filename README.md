@@ -175,30 +175,28 @@ The tool combines several complementary layers. Each layer can work independentl
 
 ```mermaid
 flowchart TD
-  A[CLI input
-  owner/repo
-  template
-  hackathon] --> B[fetchRepoData
-  (metadata, contributors, commits)]
-  A --> C[Template-driven analysis
-  getComprehensiveCodeAnalysis]
+  A[CLI input: owner/repo, template, hackathon]
+  B[fetchRepoData]
+  C[getComprehensiveCodeAnalysis]
+  D[Objective scoring]
+  E[IntelligentProjectAnalyzer]
+  F[Intelligent insights]
+  G[Final score]
+  H[Console output / JSON export]
+  I[Hackathon checks]
+  J[LLM evaluations]
+
+  A --> B
+  A --> C
   B --> C
-  C --> D[Objective scores
-  quality/docs/functionality/
-  innovation/ux]
-  B --> E[IntelligentProjectAnalyzer
-  crawl + content analysis]
-  E --> F[Intelligent results
-  purpose/architecture/
-  coherence/quality/insights]
-  D --> G[Weighted final score]
-  F --> H[Console output +
-  optional JSON export]
-  A --> I[Hackathon checks
-  dates/team/original/demo]
+  C --> D
+  B --> E
+  E --> F
+  D --> G
+  F --> H
+  A --> I
   I --> H
-  C --> J[LLM evals (optional)
-  Together AI]
+  C --> J
   J --> H
 ```
 
