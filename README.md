@@ -48,6 +48,15 @@ The tool combines several complementary layers. Each layer can work independentl
   - Fetch content for analysis with size/type filters
   - Record lists of all files/directories and retain full text for key files (code, JSON, docs, configs)
 
+- Implementation details:
+  - API endpoints: `GET /repos/{owner}/{repo}/contents/{path}` recursively for directory listings and file blobs.
+  - Directory skip list: `node_modules`, `.git`, `build`, `dist`, `out`, `.next`, `coverage`, `.nyc_output`, `.cache`, `tmp`, `temp`, `vendor`, `bower_components`, `.pnp`.
+  - File skip rules: binary and build artifacts (e.g., images/fonts/archives/executables) and any file > 1MB are ignored.
+  - “Important files” heuristic: extensions `.js/.jsx/.ts/.tsx/.json/.md/.txt/.yml/.yaml/.env` and known names like `package.json`, `README.md`, `Dockerfile`, `docker-compose.yml`, `.gitignore` are stored in `structure.files` for fast access.
+  - Structure model populated: `{ files, directories, allFiles, allDirectories, fileContents, analysis }` for downstream consumers.
+  - Resiliency: directory and file fetch errors are handled non-fatally, logged with warnings, and crawling continues.
+  - Rate limits: honors GitHub API rate-limiting via `GITHUB_TOKEN`; graceful degradation if some files cannot be fetched.
+
 ### 2) Template-driven static analysis layer
 
 - Files:
@@ -57,6 +66,13 @@ The tool combines several complementary layers. Each layer can work independentl
   - Auto-detect project type (`detectProjectTypeFromRepo`) or use user-selected template
   - Expand template wildcards (e.g., `pages/api/*`) and fetch content for those files
   - Compute per-file stats (size, line count, type) and a project summary (file count, line count, file-type distribution)
+
+- Implementation details:
+  - Project auto-detection combines root listing + `package.json` dependency inspection (e.g., `next` → Next.js, `react` → React, presence of `index.js`/`server.js` → Node.js).
+  - Wildcards are directory-expanded at fetch time; only files are analyzed from those directories.
+  - Essential files (e.g., `package.json`, `index.js`, `server.js`, `app.js`, `App.js`, `App.tsx`) are added if not already included by the template to improve coverage.
+  - Summary aggregates: total files analyzed, total lines, and file-type frequency map for quick at-a-glance metrics.
+  - Robustness: missing files are logged and skipped without failing the run.
 
 ### 3) Objective scoring layer
 
@@ -70,6 +86,16 @@ The tool combines several complementary layers. Each layer can work independentl
   - `CRITERIA_WEIGHTS` in `evaluateRepo.js`
   - Final score = weighted sum, normalized to 0–10
 
+- Scoring mechanics (high level):
+  - Project structure (up to 30 pts): compares `projectTemplates.json` criteria vs. discovered files; awards per expected file, with bonus for complete categories.
+  - Code quality (up to 25 pts): comment ratio, consistent indentation, modern language features (e.g., `async/await`, `const/let`, TS types), and presence of error handling.
+  - Security & performance (up to 25 pts): env usage, security middleware/packages (helmet/cors/rate-limit), and performance deps (compression/cache/redis), plus testing setup.
+  - Modern practices (up to 20 pts): build tools (Vite/Webpack/Tailwind/TS), CI/CD config, containerization, and database integration indicators.
+  - Functionality checks: database connection, routes, auth hints, presence of routes/controllers/models directories.
+  - Documentation: README presence and structure (headings), installation steps, and API references.
+  - UX: API docs and usage examples in README, explicit error handling patterns, CORS configuration.
+  - All raw category points are scaled to 0–10 for reporting and then weighted by `CRITERIA_WEIGHTS`.
+
 ### 4) LLM-assisted evaluation layer
 
 - Files/Functions (in `evaluateRepo.js`):
@@ -80,6 +106,13 @@ The tool combines several complementary layers. Each layer can work independentl
 - Responsibilities:
   - Produce concise expert assessments and an extracted numeric score
   - Fail-safe defaults if timeouts/errors occur
+
+- Implementation details:
+  - Model: `deepseek-ai/DeepSeek-V3` via Together AI, 30s timeout per call with Promise.race-based cancellation.
+  - Inputs: a representative code sample and/or README text are provided depending on the metric.
+  - Score extraction: `evaluateAIResponse` parses explicit “X/10” or “Score: X” patterns; falls back to keyword heuristics otherwise.
+  - Robustness: timeouts or API errors return safe default scores with explanatory feedback.
+  - Feasibility prompt (hackathon mode): summarizes codebase stats, contributor/commit counts, and the event window; requests a YES/NO plus reasoning.
 
 ### 5) Intelligent semantic analysis layer
 
@@ -98,6 +131,29 @@ The tool combines several complementary layers. Each layer can work independentl
   - Design patterns: Singleton (config), Factory, Repository, Observer, Middleware, MVC, Service Layer, Component
   - Complexity: simple, moderate, complex (based on file/dir counts)
 
+- Heuristics and metrics in depth:
+  - Purpose extraction:
+    - `package.json` dependencies map to technologies (e.g., `express`, `react`, `next`, `mongoose`, `prisma`, `typescript`, `tailwindcss`, `jest`, `cypress`).
+    - README keywords infer domain (finance/e-commerce/social/task/backend).
+    - Codefile scan looks for purpose hints (“budget”, “finance”, “transaction”, “auth”, “cron”).
+  - Architecture detection:
+    - Directory cues (e.g., `app/` vs `pages/` for Next.js, `controllers/models/views` for MVC, `services/controllers` for layered, Docker indicators for microservices).
+    - File organization report: root vs. config vs. docs vs. testing vs. deployment; `src/` breakdown (components/services/utils/types/hooks/pages/assets).
+  - Layer separation: checks for presence of typical layer directories and returns `[Presentation, Business Logic, Data Access, Utilities, Configuration, Middleware]` subset or `Monolithic`.
+  - Coherence scoring (0–10):
+    - Naming consistency: casing conventions across file/dir names, dominant patterns ratio.
+    - Structural consistency: directory depth variance, presence of logical groupings (components/services/utils/config) and occupancy of directories.
+    - Pattern consistency: dominant extensions ratio, grouping of similar file types, config grouping.
+  - Quality sub-scores (0–10 each):
+    - Maintainability: modular dirs, separation of concerns, config presence, documentation presence.
+    - Readability: docs presence, clear directory names, organization level, comment presence within fetched files.
+    - Performance: build/optimization configs and packages (`webpack`/`vite`, `compression`, caching).
+    - Security: security-related files and packages (`helmet`, `cors`, `bcrypt`, `jsonwebtoken`, `express-rate-limit`).
+    - Testability: test files/dirs and packages (`jest`, `mocha`, `cypress`, `playwright`, `@testing-library`).
+  - Insights and recommendations:
+    - `generateInsights` classifies outputs into categories (understanding, strength, improvement, information) with confidence.
+    - `generateSpecificRecommendations` suggests actionable steps for documentation, architecture, consistency, testing, security, and configuration.
+
 ### 6) Presentation and results layer
 
 - Files:
@@ -108,6 +164,12 @@ The tool combines several complementary layers. Each layer can work independentl
   - Criteria breakdown and feedback
   - Intelligent analysis summary (purpose, architecture, coherence, quality)
   - Optional JSON export via `menu.js` → `saveResultsToFile`
+
+- CLI flow details:
+  - Prompts for `owner` and `repo`, hackathon selection (or skip), project template (or auto-detect), and whether to show a detailed scoring breakdown.
+  - Optional: view all project templates and key files before running analysis.
+  - Save results option writes a timestamped JSON file (e.g., `analysis_owner_repo_YYYY-MM-DDTHH-mm-ssZ.json`).
+  - After results, you can analyze another repo, view templates again, or exit.
 
 ## Data flow
 
